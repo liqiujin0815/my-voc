@@ -288,6 +288,8 @@
         </div>
 
         <div class="func-bar">
+            <button id="loginBtn" class="primary">🔐 登录</button>
+            <button id="logoutBtn" class="danger" style="display:none;">退出</button>
             <button id="qrcodeBtn" class="primary">📱 生成二维码</button>
         </div>
 
@@ -330,6 +332,19 @@
         </div>
     </div>
 
+    <div class="modal" id="authModal">
+        <div class="modal-content">
+            <h3 id="authTitle">登录</h3>
+            <input type="text" id="username" placeholder="用户名" style="width:100%;padding:10px;margin:10px 0;" />
+            <input type="password" id="password" placeholder="密码" style="width:100%;padding:10px;margin:10px 0;" />
+            <button id="authAction" class="primary" style="width:100%;padding:10px;">登录</button>
+            <p style="margin-top:15px;">
+                <a href="#" id="toggleAuth">没有账号？去注册</a>
+            </p>
+            <button class="close-modal" id="closeAuth">关闭</button>
+        </div>
+    </div>
+
     <!-- LeanCloud SDK -->
     <script src="https://cdn.jsdelivr.net/npm/leancloud-storage@4.13.3/dist/av-min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
@@ -337,12 +352,13 @@
     <script>
         // ==================== LeanCloud 初始化 ====================
         const APP_ID = 'BYTejo5oZ9HbyH1aUzGppRg2-gzGzoHsz';
-        const APP_KEY = 'KSOa17ZVMcck81n9905e63l8';  // 您的 App Key
-AV.init({
-    appId: APP_ID,
-    appKey: APP_KEY,
-    serverURL: 'https://api.leancloud.cn'
-});
+        const APP_KEY = 'KSOa17ZVMcck81n9905e63l8';  // App Key
+        AV.init({
+            appId: APP_ID,
+            appKey: APP_KEY,
+            serverURL: 'https://api.leancloud.cn'
+        });
+        let currentUser = AV.User.current();
         const Word = AV.Object.extend('Word');
 
         // ==================== 云端图片上传 ====================
@@ -370,7 +386,9 @@ AV.init({
 
         // ==================== 云存储操作 ====================
         async function getAllWords() {
+            if (!currentUser) return [];
             const query = new AV.Query('Word');
+            query.equalTo('owner', currentUser);
             query.descending('createdAt');
             try {
                 const results = await query.find();
@@ -390,13 +408,15 @@ AV.init({
         }
 
         async function addWord(data, images) {
+            if (!currentUser) return alert('请先登录！');
             const urls = await uploadImages(images);
             const obj = new Word();
-            obj.set({ ...data, images: urls.filter(url => url) });
+            obj.set({ ...data, images: urls.filter(url => url), owner: currentUser });
             await obj.save();
         }
 
         async function updateWord(id, data, newImages) {
+            if (!currentUser) return alert('请先登录！');
             const obj = AV.Object.createWithoutData('Word', id);
             obj.set(data);
             if (newImages.length > 0) {
@@ -408,6 +428,7 @@ AV.init({
         }
 
         async function deleteWord(id) {
+            if (!currentUser) return alert('请先登录！');
             try {
                 const obj = AV.Object.createWithoutData('Word', id);
                 await obj.destroy();
@@ -447,10 +468,66 @@ AV.init({
             qrcodeBtn: document.getElementById('qrcodeBtn'),
             qrcodeModal: document.getElementById('qrcodeModal'),
             qrcodeContainer: document.getElementById('qrcode-container'),
-            closeQrcodeBtn: document.getElementById('closeQrcodeBtn')
+            closeQrcodeBtn: document.getElementById('closeQrcodeBtn'),
+            loginBtn: document.getElementById('loginBtn'),
+            logoutBtn: document.getElementById('logoutBtn'),
+            authModal: document.getElementById('authModal'),
+            authTitle: document.getElementById('authTitle'),
+            username: document.getElementById('username'),
+            password: document.getElementById('password'),
+            authAction: document.getElementById('authAction'),
+            toggleAuth: document.getElementById('toggleAuth'),
+            closeAuth: document.getElementById('closeAuth')
         };
 
         const studyState = { words: [], index: 0 };
+
+        // ==================== 用户登录/注册 ====================
+        async function login(username, password) {
+            try {
+                currentUser = await AV.User.logIn(username, password);
+                alert('登录成功！');
+                DOM.authModal.style.display = 'none';
+                await checkLogin();
+                await loadWords();
+            } catch (err) {
+                alert('登录失败：' + err.message);
+            }
+        }
+
+        async function signup(username, password) {
+            const user = new AV.User();
+            user.setUsername(username);
+            user.setPassword(password);
+            try {
+                currentUser = await user.signUp();
+                alert('注册成功！已自动登录');
+                DOM.authModal.style.display = 'none';
+                await checkLogin();
+                await loadWords();
+            } catch (err) {
+                alert('注册失败：' + err.message);
+            }
+        }
+
+        async function logout() {
+            await AV.User.logOut();
+            currentUser = null;
+            checkLogin();
+            loadWords();
+            alert('已退出登录');
+        }
+
+        function checkLogin() {
+            if (currentUser) {
+                DOM.loginBtn.style.display = 'none';
+                DOM.logoutBtn.style.display = 'inline-block';
+                DOM.logoutBtn.textContent = `退出 (${currentUser.getUsername()})`;
+            } else {
+                DOM.loginBtn.style.display = 'inline-block';
+                DOM.logoutBtn.style.display = 'none';
+            }
+        }
 
         // ==================== 图片处理 ====================
         function createImageItem(src) {
@@ -560,7 +637,38 @@ AV.init({
 
         // ==================== 初始化与事件 ====================
         async function initApp() {
+            checkLogin();
             await loadWords();
+
+            DOM.loginBtn.onclick = () => {
+                DOM.authTitle.textContent = '登录';
+                DOM.authAction.textContent = '登录';
+                DOM.toggleAuth.textContent = '没有账号？去注册';
+                DOM.authAction.onclick = async () => {
+                    const username = DOM.username.value.trim();
+                    const password = DOM.password.value.trim();
+                    if (!username || !password) return alert('用户名和密码不能为空');
+                    await login(username, password);
+                };
+                DOM.toggleAuth.onclick = (e) => {
+                    e.preventDefault();
+                    DOM.authTitle.textContent = '注册';
+                    DOM.authAction.textContent = '注册';
+                    DOM.toggleAuth.textContent = '已有账号？去登录';
+                    DOM.authAction.onclick = async () => {
+                        const username = DOM.username.value.trim();
+                        const password = DOM.password.value.trim();
+                        if (!username || !password) return alert('用户名和密码不能为空');
+                        await signup(username, password);
+                    };
+                };
+                DOM.authModal.style.display = 'flex';
+            };
+
+            DOM.logoutBtn.onclick = logout;
+
+            DOM.closeAuth.onclick = () => DOM.authModal.style.display = 'none';
+            DOM.authModal.onclick = e => { if (e.target === DOM.authModal) DOM.authModal.style.display = 'none'; };
 
             DOM.saveWordBtn.onclick = async () => {
                 DOM.saveWordBtn.disabled = true;
